@@ -44,7 +44,7 @@ VertexInputDescription Vertex::get_vertex_description()
 	return description;
 }
 
-void Mesh::load_from_obj(const char* filePath) {
+void Mesh::load_from_obj(std::string filePath) {
 	// contains the vertex arrays
 	tinyobj::attrib_t attrib;
 	// contains info for each object in file
@@ -54,7 +54,19 @@ void Mesh::load_from_obj(const char* filePath) {
 
 	std::string warn, err;
 
-	tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filePath, nullptr);
+	std::string baseDir;
+
+	// get dir of file
+	auto cutoff = filePath.rfind('/');
+	if (cutoff != std::string::npos) {
+		baseDir = filePath.substr(0, cutoff);
+	}
+
+	// tinyobj please just look for the mtl in the same dir as filePath why you do this
+	if (baseDir.empty())
+		tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filePath.c_str(), nullptr);
+	else
+		tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filePath.c_str(), baseDir.c_str());
 
 	if (!warn.empty())
 		std::cout << "Warning: " << warn << std::endl;

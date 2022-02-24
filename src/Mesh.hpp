@@ -2,6 +2,7 @@
 
 #include "VulkanTypes.hpp"
 #include <vector>
+#include <string>
 #include <glm/vec3.hpp>
 
 struct VertexInputDescription {
@@ -26,6 +27,6 @@ struct Mesh {
 
     AllocatedBuffer _vertexBuffer;
 
-    void load_from_obj(const char* filePath);
+    void load_from_obj(std::string filePath);
 };
 #pragma once
