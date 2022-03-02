@@ -3,6 +3,7 @@
 #include <tiny_obj_loader.h>
 #include <iostream>
 #include <string>
+#include <glm/glm.hpp>
 
 VertexInputDescription Vertex::get_vertex_description()
 {
@@ -44,7 +45,7 @@ VertexInputDescription Vertex::get_vertex_description()
 	return description;
 }
 
-void Mesh::load_from_obj(std::string filePath) {
+void Mesh::load_from_obj(const std::string& filePath) {
 	// contains the vertex arrays
 	tinyobj::attrib_t attrib;
 	// contains info for each object in file
@@ -88,9 +89,9 @@ void Mesh::load_from_obj(std::string filePath) {
 				tinyobj::real_t vy = attrib.vertices[3 * idx.vertex_index + 1];
 				tinyobj::real_t vz = attrib.vertices[3 * idx.vertex_index + 2];
 				// vertex normals
-				tinyobj::real_t nx = attrib.normals[3 * idx.vertex_index + 0];
-				tinyobj::real_t ny = attrib.normals[3 * idx.vertex_index + 1];
-				tinyobj::real_t nz = attrib.normals[3 * idx.vertex_index + 2];
+				tinyobj::real_t nx = attrib.normals[3 * idx.normal_index + 0];
+				tinyobj::real_t ny = attrib.normals[3 * idx.normal_index + 1];
+				tinyobj::real_t nz = attrib.normals[3 * idx.normal_index + 2];
 
 				// create new vertex
 				Vertex vert;

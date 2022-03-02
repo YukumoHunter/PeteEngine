@@ -22,6 +22,7 @@ VkPipeline PipelineBuilder::build_pipeline(VkDevice device, VkRenderPass pass) {
 	colorBlending.attachmentCount = 1;
 	colorBlending.pAttachments = &_colorBlendAttachment;
 
+
 	// construct pipeline
 	VkGraphicsPipelineCreateInfo pipelineInfo{};
 	pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -33,8 +34,9 @@ VkPipeline PipelineBuilder::build_pipeline(VkDevice device, VkRenderPass pass) {
 	pipelineInfo.pInputAssemblyState = &_inputAssembly;
 	pipelineInfo.pViewportState = &viewportState;
 	pipelineInfo.pRasterizationState = &_rasterizer;
-	pipelineInfo.pMultisampleState = &_multisampling;
 	pipelineInfo.pColorBlendState = &colorBlending;
+	pipelineInfo.pDepthStencilState = &_depthStencil;
+	pipelineInfo.pMultisampleState = &_multisampling;
 	pipelineInfo.layout = _pipelineLayout;
 	pipelineInfo.renderPass = pass;
 	pipelineInfo.subpass = 0;

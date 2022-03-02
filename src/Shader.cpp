@@ -3,7 +3,7 @@
 #include "Shader.hpp"
 
 
-VkShaderModule load_shader_module(std::string filePath, VkDevice& device)
+VkShaderModule load_shader_module(const std::string& filePath, VkDevice& device)
 {
 	// open the file with cursor at the end
 	std::ifstream file(filePath, std::ios::ate | std::ios::binary);

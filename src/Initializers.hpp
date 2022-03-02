@@ -14,4 +14,8 @@ namespace initializers {
 	VkPipelineLayoutCreateInfo pipeline_layout_create_info();
 	VkFenceCreateInfo fence_create_info(VkFenceCreateFlags flags = 0);
 	VkSemaphoreCreateInfo semaphore_create_info(VkSemaphoreCreateFlags flags = 0);
+	VkImageCreateInfo image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
+	VkImageViewCreateInfo image_view_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
+	VkPipelineDepthStencilStateCreateInfo depth_stencil_create_info(bool depthTest, bool depthWrite, VkCompareOp compareOp);
+
 }

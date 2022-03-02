@@ -23,7 +23,6 @@
 	} while (0);
 
 void PeteEngine::init() {
-
 	init_glfw();
 	init_vulkan();
 	init_swapchain();
@@ -31,9 +30,9 @@ void PeteEngine::init() {
 	init_default_renderpass();
 	init_framebuffers();
 	init_sync_structures();
+	init_descriptors();
 	init_pipelines();
-
-	load_meshes();
+	init_scene();
 
 	_isInitialized = true;
 }
@@ -57,9 +56,21 @@ void PeteEngine::init_glfw() {
 void PeteEngine::key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
 	PeteEngine *inst = static_cast<PeteEngine *>(glfwGetWindowUserPointer(window));
 	
-	if (key == GLFW_KEY_E && action == GLFW_PRESS)
+	if (key == GLFW_KEY_E && action == GLFW_REPEAT) {
 		// cycle between 0 and 1
-		inst->_selectedShader = (inst->_selectedShader + 1) % 2;
+		auto& renderables = inst->_renderables;
+		for (int i = 0; i < renderables.size(); i++) {
+			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(0, 0, .5f));
+		}
+	}
+
+	if (key == GLFW_KEY_R && action == GLFW_REPEAT) {
+		// cycle between 0 and 1
+		auto& renderables = inst->_renderables;
+		for (int i = 0; i < renderables.size(); i++) {
+			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(0, 0, -.5f));
+		}
+	}
 }
 
 void PeteEngine::init_vulkan() {
@@ -133,6 +144,35 @@ void PeteEngine::init_swapchain() {
 	_deletionQueue.push_function([=]() {
 		vkDestroySwapchainKHR(_device, _swapchain, nullptr);
 	});
+
+	// depth image matches window extent
+	VkExtent3D depthImageExtent = {
+		_windowExtent.width,
+		_windowExtent.height,
+		1
+	};
+
+	_depthFormat = VK_FORMAT_D32_SFLOAT;
+	
+	VkImageCreateInfo depthImageInfo = initializers::image_create_info(_depthFormat,
+		VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImageExtent);
+
+	VmaAllocationCreateInfo depthImageAllocInfo{};
+	depthImageAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	depthImageAllocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+	vmaCreateImage(_allocator, &depthImageInfo, &depthImageAllocInfo, &_depthImage._image,
+		&_depthImage._allocation, nullptr);
+	
+	VkImageViewCreateInfo depthImageViewInfo = initializers::image_view_create_info(_depthFormat,
+		_depthImage._image, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+	VK_CHECK(vkCreateImageView(_device, &depthImageViewInfo, nullptr, &_depthImageView));
+
+	_deletionQueue.push_function([=]() {
+		vkDestroyImageView(_device, _depthImageView, nullptr);
+		vmaDestroyImage(_allocator, _depthImage._image, _depthImage._allocation);
+	});
 }
 
 void PeteEngine::init_commands() {
@@ -140,21 +180,24 @@ void PeteEngine::init_commands() {
 	VkCommandPoolCreateInfo commandPoolInfo = initializers::command_pool_create_info(
 		_graphicsQueueFamily,
 		VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT // allow resetting of individual command buffers
-		);
-
-	VK_CHECK(vkCreateCommandPool(_device, &commandPoolInfo, nullptr, &_commandPool));
-
-	// create the command buffer
-	VkCommandBufferAllocateInfo commandBufferAllocInfo = initializers::command_buffer_allocate_info(
-		_commandPool,
-		1
 	);
 
-	VK_CHECK(vkAllocateCommandBuffers(_device, &commandBufferAllocInfo, &_mainCommandBuffer));
+	for (int i = 0; i < FRAME_OVERLAP; i++) {
 
-	_deletionQueue.push_function([=]() {
-		vkDestroyCommandPool(_device, _commandPool, nullptr);
-	});
+		VK_CHECK(vkCreateCommandPool(_device, &commandPoolInfo, nullptr, &_frames[i]._commandPool));
+
+		//allocate the default command buffer that we will use for rendering
+		VkCommandBufferAllocateInfo commandBufferAllocInfo = initializers::command_buffer_allocate_info(
+			_frames[i]._commandPool,
+			1
+		);
+
+		VK_CHECK(vkAllocateCommandBuffers(_device, &commandBufferAllocInfo, &_frames[i]._mainCommandBuffer));
+
+		_deletionQueue.push_function([=]() {
+			vkDestroyCommandPool(_device, _frames[i]._commandPool, nullptr);
+		});
+	}
 }
 
 void PeteEngine::init_default_renderpass() {
@@ -173,19 +216,60 @@ void PeteEngine::init_default_renderpass() {
 	colorAttachmentRef.attachment = 0;
 	colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+	// depth image for depth testing
+	VkAttachmentDescription depthAttachment{};
+	depthAttachment.format = _depthFormat;
+	depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+	depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentReference depthAttachmentRef{};
+	depthAttachmentRef.attachment = 1;
+	depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkSubpassDependency dependency{};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	// subpass dependent on previous render pass
+	VkSubpassDependency depthDependency{};
+	depthDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	depthDependency.dstSubpass = 0;
+	depthDependency.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	depthDependency.srcAccessMask = 0;
+	depthDependency.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	depthDependency.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+
+	VkAttachmentDescription attachments[] = { colorAttachment, depthAttachment };
+	VkSubpassDependency dependencies[] = { dependency, depthDependency };
+
 	VkSubpassDescription subpass{};
 	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 	subpass.colorAttachmentCount = 1;
 	subpass.pColorAttachments = &colorAttachmentRef;
+	subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
 	VkRenderPassCreateInfo renderPassInfo{};
 	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 
-	renderPassInfo.attachmentCount = 1;
-	renderPassInfo.pAttachments = &colorAttachment;
+	renderPassInfo.attachmentCount = 2;
+	renderPassInfo.pAttachments = attachments;
 
 	renderPassInfo.subpassCount = 1;
 	renderPassInfo.pSubpasses = &subpass;
+
+	renderPassInfo.dependencyCount = 2;
+	renderPassInfo.pDependencies = dependencies;
 
 	VK_CHECK(vkCreateRenderPass(_device, &renderPassInfo, nullptr, &_renderPass));
 
@@ -210,7 +294,14 @@ void PeteEngine::init_framebuffers() {
 
 	// create framebuffer for every image view in the swapchain
 	for (size_t i = 0; i < swapchainImageCount; i++) {
-		frameBufferInfo.pAttachments = &_swapchainImageViews[i];
+
+		VkImageView attachments[2];
+		attachments[0] = _swapchainImageViews[i];
+		attachments[1] = _depthImageView;
+
+		frameBufferInfo.pAttachments = attachments;
+		frameBufferInfo.attachmentCount = 2;
+
 		VK_CHECK(vkCreateFramebuffer(_device, &frameBufferInfo, nullptr, &_framebuffers[i]))
 
 		_deletionQueue.push_function([=]() {
@@ -222,38 +313,130 @@ void PeteEngine::init_framebuffers() {
 
 void PeteEngine::init_sync_structures() {
 	VkFenceCreateInfo fenceCreateInfo = initializers::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
-
-	VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &_renderFence));
-
-	_deletionQueue.push_function([=]() {
-		vkDestroyFence(_device, _renderFence, nullptr);
-	});
-
 	VkSemaphoreCreateInfo semaphoreCreateInfo = initializers::semaphore_create_info();
 
-	VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_presentSemaphore));
-	VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_renderSemaphore));
+	for (int i = 0; i < FRAME_OVERLAP; i++) {
+		VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &_frames[i]._renderFence));
 
+		_deletionQueue.push_function([=]() {
+			vkDestroyFence(_device, _frames[i]._renderFence, nullptr);
+		});
+
+		VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_frames[i]._presentSemaphore));
+		VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_frames[i]._renderSemaphore));
+
+		_deletionQueue.push_function([=]() {
+			vkDestroySemaphore(_device, _frames[i]._presentSemaphore, nullptr);
+			vkDestroySemaphore(_device, _frames[i]._renderSemaphore, nullptr);
+		});
+	}
+}
+
+void PeteEngine::init_descriptors() {
+	// create descriptor pool that will hold 10 uniform buffers
+	std::vector<VkDescriptorPoolSize> sizes = {
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 }
+	};
+
+	VkDescriptorPoolCreateInfo poolInfo{};
+	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	poolInfo.pNext = nullptr;
+
+	poolInfo.maxSets = 10;
+	poolInfo.poolSizeCount = static_cast<uint32_t>(sizes.size());
+	poolInfo.pPoolSizes = sizes.data();
+
+	vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_descriptorPool);
+
+	VkDescriptorSetLayoutBinding cameraBufferBinding{};
+	cameraBufferBinding.binding = 0;
+	cameraBufferBinding.descriptorCount = 1;
+	cameraBufferBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	cameraBufferBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+	VkDescriptorSetLayoutCreateInfo setInfo{};
+	setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	setInfo.pNext = nullptr;
+
+	setInfo.bindingCount = 1;
+	setInfo.pBindings = &cameraBufferBinding;
+	setInfo.flags = 0;
+
+	vkCreateDescriptorSetLayout(_device, &setInfo, nullptr, &_globalSetLayout);
+	
+	// create camera buffers
+	for (int i = 0; i < FRAME_OVERLAP; i++) {
+		_frames[i].cameraBuffer = create_buffer(sizeof(GPUCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+		VkDescriptorSetAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.pNext = nullptr;
+		
+		// using pool we just created
+		allocInfo.descriptorPool = _descriptorPool;
+		allocInfo.descriptorSetCount = 1;
+		// using the global layout for descriptor sets
+		allocInfo.pSetLayouts = &_globalSetLayout;
+
+		vkAllocateDescriptorSets(_device, &allocInfo, &_frames[i].globalDescriptor);
+		
+		// now that the descriptor set is allocated point it to the the buffer
+		VkDescriptorBufferInfo bufferInfo{};
+		bufferInfo.buffer = _frames[i].cameraBuffer._buffer;
+		bufferInfo.offset = 0;
+		bufferInfo.range = sizeof(GPUCameraData);
+
+		VkWriteDescriptorSet setWrite{};
+		setWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		setWrite.pNext = nullptr;
+		
+		setWrite.descriptorCount = 1;
+		setWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		setWrite.pBufferInfo = &bufferInfo;
+		
+		setWrite.dstBinding = 0;
+		setWrite.dstSet = _frames[i].globalDescriptor;
+		
+		// point at it...NOW!
+		vkUpdateDescriptorSets(_device, 1, &setWrite, 0, nullptr);
+
+
+	}
+
+	for (int i = 0; i < FRAME_OVERLAP; i++) {
+		_deletionQueue.push_function([=]() {
+			vmaDestroyBuffer(_allocator, _frames[i].cameraBuffer._buffer, _frames[i].cameraBuffer._allocation);
+		});
+	}
+
+	// don't forget to delete descriptor pool/set layout
 	_deletionQueue.push_function([=]() {
-		vkDestroySemaphore(_device, _presentSemaphore, nullptr);
-		vkDestroySemaphore(_device, _renderSemaphore, nullptr);
+		vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
+		vkDestroyDescriptorSetLayout(_device, _globalSetLayout, nullptr);
 	});
+
+
 }
 
 void PeteEngine::init_pipelines() {
 	VkShaderModule meshVertShader = load_shader_module("shaders/tri_mesh_vert.spv", _device);
 	VkShaderModule meshFragShader = load_shader_module("shaders/frag.spv", _device);
 
-	// create the pipeline layout
-	VkPipelineLayoutCreateInfo pipelineLayoutInfo = initializers::pipeline_layout_create_info();
-
 	VkPushConstantRange pushConstant;
 	pushConstant.offset = 0;
 	pushConstant.size = sizeof(MeshPushConstants);
 	pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+	// create the pipeline layout
+	VkPipelineLayoutCreateInfo pipelineLayoutInfo = initializers::pipeline_layout_create_info();
+
+
 	pipelineLayoutInfo.pushConstantRangeCount = 1;
 	pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
+
+	pipelineLayoutInfo.setLayoutCount = 1;
+	pipelineLayoutInfo.pSetLayouts = &_globalSetLayout;
 
 	VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &_meshPipelineLayout));
 
@@ -291,12 +474,16 @@ void PeteEngine::init_pipelines() {
 
 	// draw filled triangles
 	pipelineBuilder._rasterizer = initializers::rasterization_state_create_info(VK_POLYGON_MODE_FILL);
-	
-	pipelineBuilder._multisampling = initializers::multisampling_state_create_info();
+
 	pipelineBuilder._colorBlendAttachment = initializers::color_blend_attachment_state();
+	pipelineBuilder._depthStencil = initializers::depth_stencil_create_info(true, true, VK_COMPARE_OP_LESS_OR_EQUAL);
+	pipelineBuilder._multisampling = initializers::multisampling_state_create_info();
 	pipelineBuilder._pipelineLayout = _meshPipelineLayout;
 
 	_meshPipeline = pipelineBuilder.build_pipeline(_device, _renderPass);
+
+	// create a default material
+	create_material(_meshPipeline, _meshPipelineLayout, "default");
 
 	// destroy shader modules now that the pipeline has been created
 	vkDestroyShaderModule(_device, meshVertShader, nullptr);
@@ -310,10 +497,40 @@ void PeteEngine::init_pipelines() {
 	});
 }
 
+void PeteEngine::init_scene() {
+	load_mesh("assets/monkey_smooth.obj", "monkey");
+
+	for (int x = 0; x < 4; x++) {
+		for (int y = 0; y < 4; y++) {
+			RenderObject monkey{};
+			monkey.mesh = get_mesh("monkey");
+			monkey.material = get_material("default");
+			monkey.transformMatrix = glm::translate(
+				glm::scale(glm::mat4(1.0f), glm::vec3(0.5f)),
+				glm::vec3(x * 5 - 7.5f, y * 5 - 7.5f, 0.0f)
+			);
+
+			_renderables.push_back(monkey);
+		}
+	}
+}
+
+void PeteEngine::load_mesh(const std::string& filePath, const std::string& name)
+{
+	Mesh mesh;
+	mesh.load_from_obj(filePath);
+	upload_mesh(mesh);
+
+	_meshes[name] = mesh;
+}
+
 void PeteEngine::cleanup() {
 	if (_isInitialized) {
 
-		vkWaitForFences(_device, 1, &_renderFence, true, 1000000000);
+		// wait until all frames have finished rendering
+		VkFence fences[FRAME_OVERLAP];
+		for (int i = 0; i < FRAME_OVERLAP; i++) { fences[i] = _frames[i]._renderFence; }
+		vkWaitForFences(_device, 2, fences, true, 1000000000);
 
 		_deletionQueue.flush();
 
@@ -329,16 +546,17 @@ void PeteEngine::cleanup() {
 
 void PeteEngine::draw() {
 	// wait until the GPU has finished rendering the last frame
-	VK_CHECK(vkWaitForFences(_device, 1, &_renderFence, true, 1000000000));
-	VK_CHECK(vkResetFences(_device, 1, &_renderFence));
+	auto currentFrame = get_current_frame();
+
+	VK_CHECK(vkWaitForFences(_device, 1, &currentFrame._renderFence, true, 1000000000));
+	VK_CHECK(vkResetFences(_device, 1, &currentFrame._renderFence));
 
 	// request image from swapchain
 	uint32_t swapchainImageIndex;
-	VK_CHECK(vkAcquireNextImageKHR(_device, _swapchain, 1000000000, _presentSemaphore, nullptr, &swapchainImageIndex));
+	VK_CHECK(vkAcquireNextImageKHR(_device, _swapchain, 1000000000, currentFrame._presentSemaphore, nullptr, &swapchainImageIndex));
 
-	VK_CHECK(vkResetCommandBuffer(_mainCommandBuffer, 0));
-
-	VkCommandBuffer cmd = _mainCommandBuffer;
+	VK_CHECK(vkResetCommandBuffer(currentFrame._mainCommandBuffer, 0));
+	VkCommandBuffer cmd = currentFrame._mainCommandBuffer;
 
 	// begin the command buffer recording.
 	VkCommandBufferBeginInfo cmdBeginInfo{};
@@ -352,8 +570,12 @@ void PeteEngine::draw() {
 	VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
 
 	VkClearValue clearValue;
-	float flash = abs(sin(_frameNumber / 60.f));
-	clearValue.color = { { flash * 0.5f + 0.5f, 1.0f - flash, flash, 1.0f } };
+	clearValue.color = { 1.0f, 1.0f, 1.0f };
+
+	VkClearValue depthClear;
+	depthClear.depthStencil.depth = 1.0f;
+
+	VkClearValue clearValues[] = { clearValue, depthClear };
 
 	VkRenderPassBeginInfo renderPassInfo{};
 	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -365,37 +587,13 @@ void PeteEngine::draw() {
 	renderPassInfo.renderArea.extent = _windowExtent;
 	renderPassInfo.framebuffer = _framebuffers[swapchainImageIndex];
 
-	renderPassInfo.clearValueCount = 1;
-	renderPassInfo.pClearValues = &clearValue;
+	renderPassInfo.clearValueCount = 2;
+	renderPassInfo.pClearValues = clearValues;
 
 	// begin the render pass
 	vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
-
-	// TODO: funny camera
-	VkDeviceSize offset = 0;
-	vkCmdBindVertexBuffers(cmd, 0, 1, &_monkeyMesh._vertexBuffer._buffer, &offset);
-
-	glm::vec3 camPos = { 0.0f, 0.0f, -3.0f };
-	glm::mat4 view = glm::translate(glm::mat4(1.0f), camPos);
-
-	// camera projection
-	glm::mat4 projection = glm::perspective(glm::radians(70.0f), 1600.0f / 900.0f, 0.1f, 200.0f);
-	projection[1][1] *= -1;
-
-	// rotate model
-	//glm::mat4 model = glm::mat4(1.0f);
-	glm::mat4 model = glm::rotate(glm::mat4(1.0f), glm::radians(_frameNumber * 0.5f), glm::vec3(1, 0, 0));
-
-	glm::mat4 meshMatrix = projection * view * model;
-
-	MeshPushConstants constants;
-	constants.renderMatrix = meshMatrix;
-
-	vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
-
-	vkCmdDraw(cmd, _monkeyMesh._vertices.size(), 1, 0, 0);
+	draw_objects(cmd, _renderables);
 
 	// transition render pass to finalized state
 	vkCmdEndRenderPass(cmd);
@@ -413,15 +611,15 @@ void PeteEngine::draw() {
 	submit.pWaitDstStageMask = &waitStage;
 
 	submit.waitSemaphoreCount = 1;
-	submit.pWaitSemaphores = &_presentSemaphore;
+	submit.pWaitSemaphores = &currentFrame._presentSemaphore;
 
 	submit.signalSemaphoreCount = 1;
-	submit.pSignalSemaphores = &_renderSemaphore;
+	submit.pSignalSemaphores = &currentFrame._renderSemaphore;
 
 	submit.commandBufferCount = 1;
 	submit.pCommandBuffers = &cmd;
 
-	VK_CHECK(vkQueueSubmit(_graphicsQueue, 1, &submit, _renderFence));
+	VK_CHECK(vkQueueSubmit(_graphicsQueue, 1, &submit, currentFrame._renderFence));
 
 	// start presenting to screen
 	VkPresentInfoKHR presentInfo{};
@@ -431,7 +629,7 @@ void PeteEngine::draw() {
 	presentInfo.pSwapchains = &_swapchain;
 	presentInfo.swapchainCount = 1;
 
-	presentInfo.pWaitSemaphores = &_renderSemaphore;
+	presentInfo.pWaitSemaphores = &currentFrame._renderSemaphore;
 	presentInfo.waitSemaphoreCount = 1;
 
 	presentInfo.pImageIndices = &swapchainImageIndex;
@@ -450,22 +648,85 @@ void PeteEngine::run() {
 	}
 }
 
-void PeteEngine::load_meshes()
-{
-	_triangleMesh._vertices.resize(3);
+Material& PeteEngine::create_material(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name) {
+	Material mat;
+	mat.pipeline = pipeline;
+	mat.pipelineLayout = layout;
+	_materials[name] = mat;
+	return _materials[name];
+}
 
-	_triangleMesh._vertices[0].position = { 1.f, 1.f, 0.0f };
-	_triangleMesh._vertices[1].position = { -1.f, 1.f, 0.0f };
-	_triangleMesh._vertices[2].position = { 0.f,-1.f, 0.0f };
+Material* PeteEngine::get_material(const std::string& name) {
+	auto material = _materials.find(name);
+	if (material == _materials.end())
+		return nullptr;
+	else
+		return &material->second;
+}
 
-	_triangleMesh._vertices[0].color = { 0.f, 1.f, 0.0f }; // pure green
-	_triangleMesh._vertices[1].color = { 1.f, 1.f, 0.0f };
-	_triangleMesh._vertices[2].color = { 0.f, 1.f, 1.0f };
+Mesh* PeteEngine::get_mesh(const std::string& name) {
+	auto mesh = _meshes.find(name);
+	if (mesh == _meshes.end())
+		return nullptr;
+	else
+		return &mesh->second;
+}
 
-	_monkeyMesh.load_from_obj("assets/monkey_smooth.obj");
+FrameData& PeteEngine::get_current_frame() {
+	return _frames[_frameNumber % FRAME_OVERLAP];
+}
 
-	upload_mesh(_triangleMesh);
-	upload_mesh(_monkeyMesh);
+void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& renderables) {
+	glm::vec3 camPos = { 0.0f, 0.0f, -10.0f };
+	glm::mat4 view = glm::translate(glm::mat4(1.0f), camPos);
+	glm::mat4 projection = glm::perspective(glm::radians(85.0f), 1600.0f / 900.0f, 0.1f, 200.0f);
+	projection[1][1] *= -1;
+
+	GPUCameraData cameraData{};
+	cameraData.projection = projection;
+	cameraData.view = view;
+	cameraData.viewProjection = projection * view;
+
+	// copy camera data to the buffer on the GPU
+	auto currentFrame = get_current_frame();
+	void* data;
+
+	vmaMapMemory(_allocator, currentFrame.cameraBuffer._allocation, &data);
+	memcpy(data, &cameraData, sizeof(GPUCameraData));
+	vmaUnmapMemory(_allocator, currentFrame.cameraBuffer._allocation);
+
+	Mesh* lastMesh = nullptr;
+	Material* lastMaterial = nullptr;
+	for (int i = 0; i < renderables.size(); i++) {
+		RenderObject& object = renderables[i];
+
+		// prevent rebinding if materials are the same
+		if (object.material != lastMaterial) {
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipeline);
+			lastMaterial = object.material;
+			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
+				0, 1, &currentFrame.globalDescriptor, 0, nullptr);
+		}
+
+		glm::mat4 model = object.transformMatrix;
+		model = glm::rotate(model, (360.0f * i / 4 + _frameNumber) / 72, glm::vec3(1.0f));
+		auto meshMatrix = model;
+
+		MeshPushConstants constants;
+		constants.renderMatrix = meshMatrix;
+
+		vkCmdPushConstants(cmd, object.material->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+			sizeof(MeshPushConstants), &constants);
+
+		// prevent rebinding if meshes are the same
+		if (object.mesh != lastMesh) {
+			VkDeviceSize offset = 0;
+			vkCmdBindVertexBuffers(cmd, 0, 1, &object.mesh->_vertexBuffer._buffer, &offset);
+			lastMesh = object.mesh;
+		}
+
+		vkCmdDraw(cmd, object.mesh->_vertices.size(), 1, 0, 0);
+	}
 }
 
 void PeteEngine::upload_mesh(Mesh& mesh) {
@@ -494,6 +755,30 @@ void PeteEngine::upload_mesh(Mesh& mesh) {
 
 	vmaUnmapMemory(_allocator, mesh._vertexBuffer._allocation);
 }
+
+AllocatedBuffer PeteEngine::create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
+{
+	VkBufferCreateInfo bufferInfo{};
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.pNext = nullptr;
+
+	bufferInfo.size = allocSize;
+	bufferInfo.usage = usage;
+
+	VmaAllocationCreateInfo vmaAllocInfo{};
+	vmaAllocInfo.usage = memoryUsage;
+
+	AllocatedBuffer newBuffer;
+
+	VK_CHECK(vmaCreateBuffer(_allocator, &bufferInfo, &vmaAllocInfo,
+		&newBuffer._buffer,
+		&newBuffer._allocation,
+		nullptr
+	));
+
+	return newBuffer;
+}
+
 
 void PeteEngine::framebuffer_resize_callback(GLFWwindow* window, int width, int height) {
 	// GLFW does not know how to properly call a member function

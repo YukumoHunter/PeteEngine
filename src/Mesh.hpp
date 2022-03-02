@@ -3,7 +3,7 @@
 #include "VulkanTypes.hpp"
 #include <vector>
 #include <string>
-#include <glm/vec3.hpp>
+#include <glm/glm.hpp>
 
 struct VertexInputDescription {
 
@@ -27,6 +27,16 @@ struct Mesh {
 
     AllocatedBuffer _vertexBuffer;
 
-    void load_from_obj(std::string filePath);
+    void load_from_obj(const std::string& filePath);
 };
-#pragma once
+
+struct Material {
+    VkPipeline pipeline;
+    VkPipelineLayout pipelineLayout;
+};
+
+struct RenderObject {
+    Mesh* mesh;
+    Material* material;
+    glm::mat4 transformMatrix;
+};
