@@ -124,6 +124,8 @@ void PeteEngine::init_vulkan() {
 	_deletionQueue.push_function([=]() {
 		vmaDestroyAllocator(_allocator);
 	});
+
+	_gpuProperties = vkbDevice.physical_device.properties;
 }
 
 void PeteEngine::init_swapchain() {
@@ -335,7 +337,8 @@ void PeteEngine::init_sync_structures() {
 void PeteEngine::init_descriptors() {
 	// create descriptor pool that will hold 10 uniform buffers
 	std::vector<VkDescriptorPoolSize> sizes = {
-		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 }
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 }
 	};
 
 	VkDescriptorPoolCreateInfo poolInfo{};
@@ -347,23 +350,30 @@ void PeteEngine::init_descriptors() {
 	poolInfo.pPoolSizes = sizes.data();
 
 	vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_descriptorPool);
+	
+	// buffer for camera
+	VkDescriptorSetLayoutBinding cameraBufferBinding = initializers::descriptor_set_layout_binding(
+		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
 
-	VkDescriptorSetLayoutBinding cameraBufferBinding{};
-	cameraBufferBinding.binding = 0;
-	cameraBufferBinding.descriptorCount = 1;
-	cameraBufferBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	cameraBufferBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	// buffer for scene
+	VkDescriptorSetLayoutBinding sceneBufferBinding = initializers::descriptor_set_layout_binding(
+		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 1);
+
+	VkDescriptorSetLayoutBinding bufferBindings[] = { cameraBufferBinding, sceneBufferBinding };
 
 	VkDescriptorSetLayoutCreateInfo setInfo{};
 	setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 	setInfo.pNext = nullptr;
 
-	setInfo.bindingCount = 1;
-	setInfo.pBindings = &cameraBufferBinding;
+	setInfo.bindingCount = 2;
+	setInfo.pBindings = bufferBindings;
 	setInfo.flags = 0;
 
 	vkCreateDescriptorSetLayout(_device, &setInfo, nullptr, &_globalSetLayout);
 	
+	const size_t sceneParamBufferSize = FRAME_OVERLAP * pad_uniform_buffer_size(sizeof(GPUSceneData));
+	_sceneParameterBuffer = create_buffer(sceneParamBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
 	// create camera buffers
 	for (int i = 0; i < FRAME_OVERLAP; i++) {
 		_frames[i].cameraBuffer = create_buffer(sizeof(GPUCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -382,26 +392,26 @@ void PeteEngine::init_descriptors() {
 		vkAllocateDescriptorSets(_device, &allocInfo, &_frames[i].globalDescriptor);
 		
 		// now that the descriptor set is allocated point it to the the buffer
-		VkDescriptorBufferInfo bufferInfo{};
-		bufferInfo.buffer = _frames[i].cameraBuffer._buffer;
-		bufferInfo.offset = 0;
-		bufferInfo.range = sizeof(GPUCameraData);
+		VkDescriptorBufferInfo cameraBufferInfo{};
+		cameraBufferInfo.buffer = _frames[i].cameraBuffer._buffer;
+		cameraBufferInfo.offset = 0;
+		cameraBufferInfo.range = sizeof(GPUCameraData);
 
-		VkWriteDescriptorSet setWrite{};
-		setWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		setWrite.pNext = nullptr;
-		
-		setWrite.descriptorCount = 1;
-		setWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		setWrite.pBufferInfo = &bufferInfo;
-		
-		setWrite.dstBinding = 0;
-		setWrite.dstSet = _frames[i].globalDescriptor;
+		VkDescriptorBufferInfo sceneBufferInfo{};
+		sceneBufferInfo.buffer = _sceneParameterBuffer._buffer;
+		sceneBufferInfo.offset = 0;
+		sceneBufferInfo.range = sizeof(GPUSceneData);
+
+		VkWriteDescriptorSet camWrite = initializers::write_descriptor_buffer(
+			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, _frames[i].globalDescriptor, &cameraBufferInfo, 0);
+
+		VkWriteDescriptorSet sceneWrite = initializers::write_descriptor_buffer(
+			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, _frames[i].globalDescriptor, &sceneBufferInfo, 1);
+
+		VkWriteDescriptorSet setWrites[] = { camWrite, sceneWrite };
 		
 		// point at it...NOW!
-		vkUpdateDescriptorSets(_device, 1, &setWrite, 0, nullptr);
-
-
+		vkUpdateDescriptorSets(_device, 2, setWrites, 0, nullptr);
 	}
 
 	for (int i = 0; i < FRAME_OVERLAP; i++) {
@@ -412,15 +422,16 @@ void PeteEngine::init_descriptors() {
 
 	// don't forget to delete descriptor pool/set layout
 	_deletionQueue.push_function([=]() {
+		vmaDestroyBuffer(_allocator, _sceneParameterBuffer._buffer, _sceneParameterBuffer._allocation);
+
 		vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
 		vkDestroyDescriptorSetLayout(_device, _globalSetLayout, nullptr);
 	});
 
-
 }
 
 void PeteEngine::init_pipelines() {
-	VkShaderModule meshVertShader = load_shader_module("shaders/tri_mesh_vert.spv", _device);
+	VkShaderModule meshVertShader = load_shader_module("shaders/vert.spv", _device);
 	VkShaderModule meshFragShader = load_shader_module("shaders/frag.spv", _device);
 
 	VkPushConstantRange pushConstant;
@@ -690,10 +701,19 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 	// copy camera data to the buffer on the GPU
 	auto currentFrame = get_current_frame();
 	void* data;
-
 	vmaMapMemory(_allocator, currentFrame.cameraBuffer._allocation, &data);
 	memcpy(data, &cameraData, sizeof(GPUCameraData));
 	vmaUnmapMemory(_allocator, currentFrame.cameraBuffer._allocation);
+
+	// copy scene data too
+	float framed = (_frameNumber / 120.f);
+	_sceneParameters.ambientColor = { sin(framed),0,cos(framed),1 };
+	char* sceneData;
+	vmaMapMemory(_allocator, _sceneParameterBuffer._allocation, (void**)&sceneData);
+	int frameIndex = _frameNumber % FRAME_OVERLAP;
+	sceneData += pad_uniform_buffer_size(sizeof(GPUSceneData)) * frameIndex;
+	memcpy(sceneData, &_sceneParameters, sizeof(GPUSceneData));
+	vmaUnmapMemory(_allocator, _sceneParameterBuffer._allocation);
 
 	Mesh* lastMesh = nullptr;
 	Material* lastMaterial = nullptr;
@@ -704,8 +724,11 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 		if (object.material != lastMaterial) {
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipeline);
 			lastMaterial = object.material;
+
+			uint32_t uniformOffset = pad_uniform_buffer_size(sizeof(GPUSceneData)) * frameIndex;
+
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
-				0, 1, &currentFrame.globalDescriptor, 0, nullptr);
+				0, 1, &currentFrame.globalDescriptor, 1, &uniformOffset);
 		}
 
 		glm::mat4 model = object.transformMatrix;
@@ -779,6 +802,17 @@ AllocatedBuffer PeteEngine::create_buffer(size_t allocSize, VkBufferUsageFlags u
 	return newBuffer;
 }
 
+size_t PeteEngine::pad_uniform_buffer_size(size_t originalSize) {
+	// calculate the required alignment based on min offset on physDevice
+	// https://github.com/SaschaWillems/Vulkan/blob/master/examples/dynamicuniformbuffer/dynamicuniformbuffer.cpp
+	size_t minAlignment = _gpuProperties.limits.minUniformBufferOffsetAlignment;
+	size_t alignedSize = originalSize;
+
+	if (minAlignment > 0)
+		alignedSize = (alignedSize + minAlignment - 1) & ~(minAlignment - 1);
+
+	return alignedSize;
+}
 
 void PeteEngine::framebuffer_resize_callback(GLFWwindow* window, int width, int height) {
 	// GLFW does not know how to properly call a member function

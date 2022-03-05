@@ -191,4 +191,29 @@ namespace initializers {
 
 		return info;
 	}
+
+	VkDescriptorSetLayoutBinding descriptor_set_layout_binding(VkDescriptorType type, VkShaderStageFlags stageFlags, uint32_t binding) {
+		VkDescriptorSetLayoutBinding setBind{};
+		setBind.binding = binding;
+		setBind.descriptorCount = 1;
+		setBind.descriptorType = type;
+		setBind.pImmutableSamplers = nullptr;
+		setBind.stageFlags = stageFlags;
+
+		return setBind;
+	}
+
+	VkWriteDescriptorSet write_descriptor_buffer(VkDescriptorType type, VkDescriptorSet dstSet, VkDescriptorBufferInfo* bufferInfo, uint32_t binding) {
+		VkWriteDescriptorSet write{};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.pNext = nullptr;
+
+		write.dstBinding = binding;
+		write.dstSet = dstSet;
+		write.descriptorCount = 1;
+		write.descriptorType = type;
+		write.pBufferInfo = bufferInfo;
+
+		return write;
+	}
 }

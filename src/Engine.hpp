@@ -28,6 +28,15 @@ struct GPUCameraData {
 	glm::mat4 viewProjection;
 };
 
+struct GPUSceneData {
+	glm::vec4 fogColor; // exponent in w
+	glm::vec4 fogDistances; // min in x, max in y, zw unused.
+	glm::vec4 ambientColor;
+	glm::vec4 sunlightDirection; // sun power in w
+	glm::vec4 sunlightColor;
+};
+
+
 struct FrameData {
 	VkSemaphore _presentSemaphore, _renderSemaphore;
 	VkFence _renderFence;
@@ -59,6 +68,7 @@ public:
 	VkInstance _instance;
 	VkDebugUtilsMessengerEXT _debugMessenger;
 	VkPhysicalDevice _physDevice;
+	VkPhysicalDeviceProperties _gpuProperties;
 	VkDevice _device;
 	VkSurfaceKHR _surface;
 
@@ -85,6 +95,9 @@ public:
 
 	VkDescriptorSetLayout _globalSetLayout;
 	VkDescriptorPool _descriptorPool;
+
+	GPUSceneData _sceneParameters;
+	AllocatedBuffer _sceneParameterBuffer;
 
 	DeletionQueue _deletionQueue;
 
@@ -118,6 +131,8 @@ private:
 
 	void load_mesh(const std::string& filePath, const std::string& name);
 	void upload_mesh(Mesh& mesh);
+
+	size_t pad_uniform_buffer_size(size_t originalSize);
 
 	static void framebuffer_resize_callback(GLFWwindow* window, int width, int height);
 	static void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
