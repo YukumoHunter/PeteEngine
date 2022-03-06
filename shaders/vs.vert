@@ -13,15 +13,25 @@ layout (set = 0, binding = 0) uniform CameraBuffer {
 	mat4 viewProjection;
 } cameraData;
 
-layout (push_constant) uniform constants
-{
+struct ObjectData {
+	mat4 model;
+};
+
+layout (std140, set = 1, binding = 0) readonly buffer ObjectBuffer {
+	ObjectData objects[];
+} objectBuffer;
+
+// these go unused now
+layout (push_constant) uniform constants {
 	vec4 data;
 	mat4 renderMatrix;
-} PushConstants;
+} pushConstants;
 
 void main()
 {
-	mat4 transformMatrix = (cameraData.viewProjection * PushConstants.renderMatrix);
+	mat4 modelMatrix = objectBuffer.objects[gl_BaseInstance].model;
+	mat4 transformMatrix = (cameraData.viewProjection * modelMatrix);
 	gl_Position = transformMatrix * vec4(vPosition, 1.0f);
 	outColor = vColor;
 }
+
