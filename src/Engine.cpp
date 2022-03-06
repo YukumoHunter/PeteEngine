@@ -93,10 +93,15 @@ void PeteEngine::init_vulkan() {
 	// create a surface for the instance to render to
 	glfwCreateWindowSurface(_instance, _window, nullptr, &_surface);
 
+	// extra features required to use gl_BaseInstance
+	VkPhysicalDeviceVulkan11Features features{};
+	features.shaderDrawParameters = VK_TRUE;
+
 	// select a GPU that fits our needs
 	vkb::PhysicalDeviceSelector selector{ vkbInst };
 	vkb::PhysicalDevice physicalDevice = selector
 		.set_minimum_version(1, 2)
+		.set_required_features_11(features)
 		.set_surface(_surface)
 		.select()
 		.value();
@@ -335,10 +340,11 @@ void PeteEngine::init_sync_structures() {
 }
 
 void PeteEngine::init_descriptors() {
-	// create descriptor pool that will hold 10 uniform buffers
+	// create descriptor pool that will hold 10 of each buffer we need
 	std::vector<VkDescriptorPoolSize> sizes = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 },
-		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 }
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 }
 	};
 
 	VkDescriptorPoolCreateInfo poolInfo{};
@@ -350,7 +356,7 @@ void PeteEngine::init_descriptors() {
 	poolInfo.pPoolSizes = sizes.data();
 
 	vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_descriptorPool);
-	
+
 	// buffer for camera
 	VkDescriptorSetLayoutBinding cameraBufferBinding = initializers::descriptor_set_layout_binding(
 		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
@@ -370,12 +376,27 @@ void PeteEngine::init_descriptors() {
 	setInfo.flags = 0;
 
 	vkCreateDescriptorSetLayout(_device, &setInfo, nullptr, &_globalSetLayout);
+
+	// buffer for object storage
+	VkDescriptorSetLayoutBinding objectBinding = initializers::descriptor_set_layout_binding(
+		VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0
+	);
+
+	// reuse previous set info
+	setInfo.bindingCount = 1;
+	setInfo.pBindings = &objectBinding;
 	
+	vkCreateDescriptorSetLayout(_device, &setInfo, nullptr, &_objectSetLayout);
+
 	const size_t sceneParamBufferSize = FRAME_OVERLAP * pad_uniform_buffer_size(sizeof(GPUSceneData));
 	_sceneParameterBuffer = create_buffer(sceneParamBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
 
 	// create camera buffers
 	for (int i = 0; i < FRAME_OVERLAP; i++) {
+		const int MAX_OBJECTS = 10000;
+		_frames[i].objectBuffer = create_buffer(sizeof(GPUObjectData) * MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+			VMA_MEMORY_USAGE_CPU_TO_GPU);
+
 		_frames[i].cameraBuffer = create_buffer(sizeof(GPUCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VMA_MEMORY_USAGE_CPU_TO_GPU);
 
@@ -391,6 +412,10 @@ void PeteEngine::init_descriptors() {
 
 		vkAllocateDescriptorSets(_device, &allocInfo, &_frames[i].globalDescriptor);
 		
+		allocInfo.pSetLayouts = &_objectSetLayout;
+
+		vkAllocateDescriptorSets(_device, &allocInfo, &_frames[i].objectDescriptor);
+
 		// now that the descriptor set is allocated point it to the the buffer
 		VkDescriptorBufferInfo cameraBufferInfo{};
 		cameraBufferInfo.buffer = _frames[i].cameraBuffer._buffer;
@@ -402,29 +427,39 @@ void PeteEngine::init_descriptors() {
 		sceneBufferInfo.offset = 0;
 		sceneBufferInfo.range = sizeof(GPUSceneData);
 
+		VkDescriptorBufferInfo objectBufferInfo{};
+		objectBufferInfo.buffer = _frames[i].objectBuffer._buffer;
+		objectBufferInfo.offset = 0;
+		objectBufferInfo.range = sizeof(GPUObjectData) * MAX_OBJECTS;
+
 		VkWriteDescriptorSet camWrite = initializers::write_descriptor_buffer(
 			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, _frames[i].globalDescriptor, &cameraBufferInfo, 0);
 
 		VkWriteDescriptorSet sceneWrite = initializers::write_descriptor_buffer(
 			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, _frames[i].globalDescriptor, &sceneBufferInfo, 1);
 
-		VkWriteDescriptorSet setWrites[] = { camWrite, sceneWrite };
+		VkWriteDescriptorSet objectWrite = initializers::write_descriptor_buffer(
+			VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, _frames[i].objectDescriptor, &objectBufferInfo, 0);
+
+		VkWriteDescriptorSet setWrites[] = { camWrite, sceneWrite, objectWrite };
 		
 		// point at it...NOW!
-		vkUpdateDescriptorSets(_device, 2, setWrites, 0, nullptr);
+		vkUpdateDescriptorSets(_device, 3, setWrites, 0, nullptr);
 	}
 
 	for (int i = 0; i < FRAME_OVERLAP; i++) {
 		_deletionQueue.push_function([=]() {
+			vmaDestroyBuffer(_allocator, _frames[i].objectBuffer._buffer, _frames[i].objectBuffer._allocation);
 			vmaDestroyBuffer(_allocator, _frames[i].cameraBuffer._buffer, _frames[i].cameraBuffer._allocation);
 		});
 	}
 
-	// don't forget to delete descriptor pool/set layout
+	// don't forget to delete descriptor pool/set layouts
 	_deletionQueue.push_function([=]() {
 		vmaDestroyBuffer(_allocator, _sceneParameterBuffer._buffer, _sceneParameterBuffer._allocation);
 
 		vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
+		vkDestroyDescriptorSetLayout(_device, _objectSetLayout, nullptr);
 		vkDestroyDescriptorSetLayout(_device, _globalSetLayout, nullptr);
 	});
 
@@ -439,15 +474,16 @@ void PeteEngine::init_pipelines() {
 	pushConstant.size = sizeof(MeshPushConstants);
 	pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+	VkDescriptorSetLayout setLayouts[] = { _globalSetLayout, _objectSetLayout };
+
 	// create the pipeline layout
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo = initializers::pipeline_layout_create_info();
-
 
 	pipelineLayoutInfo.pushConstantRangeCount = 1;
 	pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
-	pipelineLayoutInfo.setLayoutCount = 1;
-	pipelineLayoutInfo.pSetLayouts = &_globalSetLayout;
+	pipelineLayoutInfo.setLayoutCount = 2;
+	pipelineLayoutInfo.pSetLayouts = setLayouts;
 
 	VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &_meshPipelineLayout));
 
@@ -511,14 +547,14 @@ void PeteEngine::init_pipelines() {
 void PeteEngine::init_scene() {
 	load_mesh("assets/monkey_smooth.obj", "monkey");
 
-	for (int x = 0; x < 4; x++) {
-		for (int y = 0; y < 4; y++) {
+	for (int x = 0; x < 10; x++) {
+		for (int y = 0; y < 10; y++) {
 			RenderObject monkey{};
 			monkey.mesh = get_mesh("monkey");
 			monkey.material = get_material("default");
 			monkey.transformMatrix = glm::translate(
 				glm::scale(glm::mat4(1.0f), glm::vec3(0.5f)),
-				glm::vec3(x * 5 - 7.5f, y * 5 - 7.5f, 0.0f)
+				glm::vec3(x * 5 - 22.5f, y * 5 - 22.5f, 0.0f)
 			);
 
 			_renderables.push_back(monkey);
@@ -706,14 +742,25 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 	vmaUnmapMemory(_allocator, currentFrame.cameraBuffer._allocation);
 
 	// copy scene data too
-	float framed = (_frameNumber / 120.f);
-	_sceneParameters.ambientColor = { sin(framed),0,cos(framed),1 };
+	float slowFrame = (_frameNumber / 120.f);
+	_sceneParameters.ambientColor = { sin(slowFrame),0,0,1};
 	char* sceneData;
 	vmaMapMemory(_allocator, _sceneParameterBuffer._allocation, (void**)&sceneData);
 	int frameIndex = _frameNumber % FRAME_OVERLAP;
 	sceneData += pad_uniform_buffer_size(sizeof(GPUSceneData)) * frameIndex;
 	memcpy(sceneData, &_sceneParameters, sizeof(GPUSceneData));
 	vmaUnmapMemory(_allocator, _sceneParameterBuffer._allocation);
+
+	// and object data
+	void* objectData;
+	vmaMapMemory(_allocator, currentFrame.objectBuffer._allocation, &objectData);
+	GPUObjectData* objectSSBO = reinterpret_cast<GPUObjectData*>(objectData);
+	for (int i = 0; i < renderables.size(); i++) {
+		RenderObject& object = renderables[i];
+		objectSSBO[i].modelMatrix = glm::rotate(object.transformMatrix,
+			(360.0f * i / renderables.size() + _frameNumber) / 36, glm::vec3(1.0f));
+	}
+	vmaUnmapMemory(_allocator, currentFrame.objectBuffer._allocation);
 
 	Mesh* lastMesh = nullptr;
 	Material* lastMaterial = nullptr;
@@ -725,18 +772,18 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipeline);
 			lastMaterial = object.material;
 
+			// camera data descriptor
 			uint32_t uniformOffset = pad_uniform_buffer_size(sizeof(GPUSceneData)) * frameIndex;
-
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
 				0, 1, &currentFrame.globalDescriptor, 1, &uniformOffset);
+
+			// object data descriptor
+			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
+				1, 1, &currentFrame.objectDescriptor, 0, nullptr);
 		}
 
-		glm::mat4 model = object.transformMatrix;
-		model = glm::rotate(model, (360.0f * i / 4 + _frameNumber) / 72, glm::vec3(1.0f));
-		auto meshMatrix = model;
-
 		MeshPushConstants constants;
-		constants.renderMatrix = meshMatrix;
+		constants.renderMatrix = renderables[i].transformMatrix;
 
 		vkCmdPushConstants(cmd, object.material->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
 			sizeof(MeshPushConstants), &constants);
@@ -748,7 +795,7 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 			lastMesh = object.mesh;
 		}
 
-		vkCmdDraw(cmd, object.mesh->_vertices.size(), 1, 0, 0);
+		vkCmdDraw(cmd, object.mesh->_vertices.size(), 1, 0, i);
 	}
 }
 

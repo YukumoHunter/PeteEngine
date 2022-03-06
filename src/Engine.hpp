@@ -36,6 +36,9 @@ struct GPUSceneData {
 	glm::vec4 sunlightColor;
 };
 
+struct GPUObjectData {
+	glm::mat4 modelMatrix;
+};
 
 struct FrameData {
 	VkSemaphore _presentSemaphore, _renderSemaphore;
@@ -45,8 +48,10 @@ struct FrameData {
 	VkCommandBuffer _mainCommandBuffer;
 
 	AllocatedBuffer cameraBuffer;
-
 	VkDescriptorSet globalDescriptor;
+
+	AllocatedBuffer objectBuffer;
+	VkDescriptorSet objectDescriptor;
 };
 
 class PeteEngine {
@@ -94,6 +99,8 @@ public:
 	FrameData _frames[FRAME_OVERLAP];
 
 	VkDescriptorSetLayout _globalSetLayout;
+	VkDescriptorSetLayout _objectSetLayout;
+
 	VkDescriptorPool _descriptorPool;
 
 	GPUSceneData _sceneParameters;
