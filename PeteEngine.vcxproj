@@ -97,7 +97,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Harold\Development\PeteEngine\third_party\stb;$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -115,7 +115,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Harold\Development\PeteEngine\third_party\stb;$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -133,7 +133,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Harold\Development\PeteEngine\third_party\stb;$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -151,7 +151,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Harold\Development\PeteEngine\third_party\stb;$(SolutionDir)\third_party\tinyobjloader;$(SolutionDir)\third_party\vma;$(SolutionDir)\third_party\vk-bootstrap;$(VULKAN_SDK)\Include;$(VisualStudioDir)\Libraries\glm;$(VisualStudioDir)\Libraries\glfw-3.3.6.bin.WIN64\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -169,6 +169,7 @@
     <ClCompile Include="src\Mesh.cpp" />
     <ClCompile Include="src\Pipeline.cpp" />
     <ClCompile Include="src\Shader.cpp" />
+    <ClCompile Include="src\Textures.cpp" />
     <ClCompile Include="third_party\vk-bootstrap\VkBootstrap.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -177,6 +178,7 @@
     <ClInclude Include="src\Mesh.hpp" />
     <ClInclude Include="src\Pipeline.hpp" />
     <ClInclude Include="src\Shader.hpp" />
+    <ClInclude Include="src\Textures.hpp" />
     <ClInclude Include="src\VulkanTypes.hpp" />
     <ClInclude Include="third_party\vk-bootstrap\VkBootstrap.h" />
     <ClInclude Include="third_party\vk-bootstrap\VkBootstrapDispatch.h" />

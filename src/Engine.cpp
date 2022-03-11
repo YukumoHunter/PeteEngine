@@ -3,6 +3,8 @@
 #include "Initializers.hpp"
 #include "Pipeline.hpp"
 #include "Shader.hpp"
+#include "Textures.hpp"
+
 #include "VkBootstrap.h"
 #include <GLFW/glfw3.h>
 #include <glm/gtx/transform.hpp>
@@ -32,6 +34,7 @@ void PeteEngine::init() {
 	init_sync_structures();
 	init_descriptors();
 	init_pipelines();
+	load_images();
 	init_scene();
 
 	_isInitialized = true;
@@ -189,11 +192,27 @@ void PeteEngine::init_commands() {
 		VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT // allow resetting of individual command buffers
 	);
 
+	VkCommandPoolCreateInfo uploadCommandPoolInfo = initializers::command_pool_create_info(
+		_graphicsQueueFamily
+	);
+
+	VK_CHECK(vkCreateCommandPool(_device, &uploadCommandPoolInfo, nullptr, &_uploadContext._commandPool));
+
+	_deletionQueue.push_function([=]() {
+		vkDestroyCommandPool(_device, _uploadContext._commandPool, nullptr);
+	});
+
+	// allocate the command buffer that we will use for instant commands
+	VkCommandBufferAllocateInfo commandBufferAllocInfo = initializers::command_buffer_allocate_info(
+		_uploadContext._commandPool, 1);
+
+	VK_CHECK(vkAllocateCommandBuffers(_device, &commandBufferAllocInfo, &_uploadContext._commandBuffer));
+
 	for (int i = 0; i < FRAME_OVERLAP; i++) {
 
 		VK_CHECK(vkCreateCommandPool(_device, &commandPoolInfo, nullptr, &_frames[i]._commandPool));
 
-		//allocate the default command buffer that we will use for rendering
+		// allocate the default command buffer that we will use for rendering
 		VkCommandBufferAllocateInfo commandBufferAllocInfo = initializers::command_buffer_allocate_info(
 			_frames[i]._commandPool,
 			1
@@ -320,10 +339,13 @@ void PeteEngine::init_framebuffers() {
 
 void PeteEngine::init_sync_structures() {
 	VkFenceCreateInfo fenceCreateInfo = initializers::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
+	VkFenceCreateInfo uploadFenceCreateInfo = initializers::fence_create_info();
 	VkSemaphoreCreateInfo semaphoreCreateInfo = initializers::semaphore_create_info();
 
+	VK_CHECK(vkCreateFence(_device, &uploadFenceCreateInfo, nullptr, &_uploadContext._uploadFence));
 	for (int i = 0; i < FRAME_OVERLAP; i++) {
 		VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &_frames[i]._renderFence));
+
 
 		_deletionQueue.push_function([=]() {
 			vkDestroyFence(_device, _frames[i]._renderFence, nullptr);
@@ -337,6 +359,10 @@ void PeteEngine::init_sync_structures() {
 			vkDestroySemaphore(_device, _frames[i]._renderSemaphore, nullptr);
 		});
 	}
+
+	_deletionQueue.push_function([=]() {
+		vkDestroyFence(_device, _uploadContext._uploadFence, nullptr);
+	});
 }
 
 void PeteEngine::init_descriptors() {
@@ -719,6 +745,27 @@ Mesh* PeteEngine::get_mesh(const std::string& name) {
 		return &mesh->second;
 }
 
+void PeteEngine::immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function) {
+	VkCommandBuffer cmd = _uploadContext._commandBuffer;
+
+	VkCommandBufferBeginInfo cmdBeginInfo = initializers::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+	VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+
+	function(cmd);
+
+	VK_CHECK(vkEndCommandBuffer(cmd));
+
+	VkSubmitInfo submit = initializers::submit_info(&cmd);
+
+	VK_CHECK(vkQueueSubmit(_graphicsQueue, 1, &submit, _uploadContext._uploadFence));
+
+	vkWaitForFences(_device, 1, &_uploadContext._uploadFence, true, 10000000000);
+	vkResetFences(_device, 1, &_uploadContext._uploadFence);
+
+	vkResetCommandPool(_device, _uploadContext._commandPool, 0);
+}
+
 FrameData& PeteEngine::get_current_frame() {
 	return _frames[_frameNumber % FRAME_OVERLAP];
 }
@@ -800,34 +847,80 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 }
 
 void PeteEngine::upload_mesh(Mesh& mesh) {
-	VkBufferCreateInfo bufferInfo{};
-	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufferInfo.size = mesh._vertices.size() * sizeof(Vertex);
-	bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+	const size_t bufferSize = mesh._vertices.size() * sizeof(Vertex);
+	VkBufferCreateInfo stagingBufferInfo{};
+	stagingBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	stagingBufferInfo.pNext = nullptr;
+
+	stagingBufferInfo.size = bufferSize;
+	stagingBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	VmaAllocationCreateInfo vmaAllocInfo{};
-	vmaAllocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	vmaAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
 
-	VK_CHECK(vmaCreateBuffer(_allocator, &bufferInfo, &vmaAllocInfo,
-		&mesh._vertexBuffer._buffer,
-		&mesh._vertexBuffer._allocation,
+	AllocatedBuffer stagingBuffer;
+
+	VK_CHECK(vmaCreateBuffer(_allocator, &stagingBufferInfo, &vmaAllocInfo,
+		&stagingBuffer._buffer,
+		&stagingBuffer._allocation,
 		nullptr)
 	);
 
-	_deletionQueue.push_function([=]() {
-		vmaDestroyBuffer(_allocator, mesh._vertexBuffer._buffer, mesh._vertexBuffer._allocation);
+	// copy mesh data to buffer
+	void* data;
+	vmaMapMemory(_allocator, stagingBuffer._allocation, &data);
+	memcpy(data, mesh._vertices.data(), bufferSize);
+	vmaUnmapMemory(_allocator, stagingBuffer._allocation);
+
+	VkBufferCreateInfo vertexBufferInfo{};
+	vertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	vertexBufferInfo.pNext = nullptr;
+
+	vertexBufferInfo.size = bufferSize;
+	vertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+	vmaAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+	VK_CHECK(vmaCreateBuffer(_allocator, &vertexBufferInfo, &vmaAllocInfo,
+		&mesh._vertexBuffer._buffer,
+		&mesh._vertexBuffer._allocation,
+		nullptr
+	));
+
+	// copy buffer region to GPU
+	immediate_submit([=](VkCommandBuffer cmd) {
+		VkBufferCopy copy;
+		copy.srcOffset = 0;
+		copy.dstOffset = 0;
+		copy.size = bufferSize;
+		vkCmdCopyBuffer(cmd, stagingBuffer._buffer, mesh._vertexBuffer._buffer, 1, &copy);
 	});
 
-	void* data;
-	vmaMapMemory(_allocator, mesh._vertexBuffer._allocation, &data);
+	_deletionQueue.push_function([=]() {
+	vmaDestroyBuffer(_allocator, mesh._vertexBuffer._buffer, mesh._vertexBuffer._allocation);
+	});
 
-	memcpy(data, mesh._vertices.data(), mesh._vertices.size() * sizeof(Vertex));
-
-	vmaUnmapMemory(_allocator, mesh._vertexBuffer._allocation);
+	vmaDestroyBuffer(_allocator, stagingBuffer._buffer, stagingBuffer._allocation);
 }
 
-AllocatedBuffer PeteEngine::create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
-{
+void PeteEngine::load_images() {
+	Texture lostEmpire;
+
+	utils::load_image_from_file("./assets/lost_empire-RGBA.png", lostEmpire.image, *this);
+
+	VkImageViewCreateInfo imgInfo = initializers::image_view_create_info(VK_FORMAT_R8G8B8A8_SRGB,
+		lostEmpire.image._image, VK_IMAGE_ASPECT_COLOR_BIT);
+
+	vkCreateImageView(_device, &imgInfo, nullptr, &lostEmpire.imageView);
+
+	_deletionQueue.push_function([=]() {
+		vkDestroyImageView(_device, lostEmpire.imageView, nullptr);
+	});
+
+	_textures["empire_diffuse"] = lostEmpire;
+}
+
+AllocatedBuffer PeteEngine::create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage) {
 	VkBufferCreateInfo bufferInfo{};
 	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 	bufferInfo.pNext = nullptr;

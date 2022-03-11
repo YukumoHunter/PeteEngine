@@ -4,9 +4,16 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "Mesh.hpp"
+
 #include "VulkanTypes.hpp"
 
 const int FRAME_OVERLAP = 2;
+
+struct UploadContext {
+	VkFence _uploadFence;
+	VkCommandPool _commandPool;
+	VkCommandBuffer _commandBuffer;
+};
 
 struct MeshPushConstants {
 	glm::vec4 data;
@@ -54,6 +61,11 @@ struct FrameData {
 	VkDescriptorSet objectDescriptor;
 };
 
+struct Texture {
+	AllocatedImage image;
+	VkImageView imageView;
+};
+
 class PeteEngine {
 public:
 	bool _isInitialized{ false };
@@ -63,10 +75,10 @@ public:
 	struct GLFWwindow* _window{ nullptr };
 	VkExtent2D _windowExtent{ 1920 , 1080 };
 
-
 	std::vector<RenderObject> _renderables;
 	std::unordered_map<std::string, Material> _materials;
 	std::unordered_map<std::string, Mesh> _meshes;
+	std::unordered_map<std::string, Texture> _textures;
 
 	VmaAllocator _allocator;
 
@@ -106,6 +118,8 @@ public:
 	GPUSceneData _sceneParameters;
 	AllocatedBuffer _sceneParameterBuffer;
 
+	UploadContext _uploadContext;
+
 	DeletionQueue _deletionQueue;
 
 	void init();
@@ -118,6 +132,8 @@ public:
 
 	Material* get_material(const std::string& name);
 	Mesh* get_mesh(const std::string& name);
+
+	void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function);
 
 	// draw function
 	void draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& renderables);
@@ -138,6 +154,8 @@ private:
 
 	void load_mesh(const std::string& filePath, const std::string& name);
 	void upload_mesh(Mesh& mesh);
+
+	void load_images();
 
 	size_t pad_uniform_buffer_size(size_t originalSize);
 
