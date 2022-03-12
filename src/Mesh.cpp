@@ -17,30 +17,38 @@ VertexInputDescription Vertex::get_vertex_description()
 
 	description.bindings.push_back(mainBinding);
 
-	//Position will be stored at Location 0
+	// Position will be stored at Location 0
 	VkVertexInputAttributeDescription positionAttribute{};
 	positionAttribute.binding = 0;
 	positionAttribute.location = 0;
 	positionAttribute.format = VK_FORMAT_R32G32B32_SFLOAT;
 	positionAttribute.offset = offsetof(Vertex, position);
 
-	//Normal will be stored at Location 1
+	// Normal will be stored at Location 1
 	VkVertexInputAttributeDescription normalAttribute{};
 	normalAttribute.binding = 0;
 	normalAttribute.location = 1;
 	normalAttribute.format = VK_FORMAT_R32G32B32_SFLOAT;
 	normalAttribute.offset = offsetof(Vertex, normal);
 
-	//Color will be stored at Location 2
+	// Color will be stored at Location 2
 	VkVertexInputAttributeDescription colorAttribute{};
 	colorAttribute.binding = 0;
 	colorAttribute.location = 2;
 	colorAttribute.format = VK_FORMAT_R32G32B32_SFLOAT;
 	colorAttribute.offset = offsetof(Vertex, color);
 
+	// UV will be stored at Location 3
+	VkVertexInputAttributeDescription uvAttribute{};
+	uvAttribute.binding = 0;
+	uvAttribute.location = 3;
+	uvAttribute.format = VK_FORMAT_R32G32_SFLOAT;
+	uvAttribute.offset = offsetof(Vertex, uv);
+
 	description.attributes.push_back(positionAttribute);
 	description.attributes.push_back(normalAttribute);
 	description.attributes.push_back(colorAttribute);
+	description.attributes.push_back(uvAttribute);
 
 	return description;
 }
@@ -85,13 +93,16 @@ void Mesh::load_from_obj(const std::string& filePath) {
 				// access the vertex
 				tinyobj::index_t idx = shapes[s].mesh.indices[indexOffset + v];
 				// vertex position
-				tinyobj::real_t vx = attrib.vertices[3 * idx.vertex_index + 0];
+				tinyobj::real_t vx = attrib.vertices[3 * idx.vertex_index];
 				tinyobj::real_t vy = attrib.vertices[3 * idx.vertex_index + 1];
 				tinyobj::real_t vz = attrib.vertices[3 * idx.vertex_index + 2];
 				// vertex normals
-				tinyobj::real_t nx = attrib.normals[3 * idx.normal_index + 0];
+				tinyobj::real_t nx = attrib.normals[3 * idx.normal_index];
 				tinyobj::real_t ny = attrib.normals[3 * idx.normal_index + 1];
 				tinyobj::real_t nz = attrib.normals[3 * idx.normal_index + 2];
+				// vertex uv
+				tinyobj::real_t ux = attrib.texcoords[2 * idx.texcoord_index];
+				tinyobj::real_t uy = attrib.texcoords[2 * idx.texcoord_index + 1];
 
 				// create new vertex
 				Vertex vert;
@@ -102,6 +113,10 @@ void Mesh::load_from_obj(const std::string& filePath) {
 				vert.normal.x = nx;
 				vert.normal.y = ny;
 				vert.normal.z = nz;
+
+				vert.uv.x = ux;
+				// vulkan UV coordinates need flipped y
+				vert.uv.y = 1 - uy;
 
 				vert.color = vert.normal;
 

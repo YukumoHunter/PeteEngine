@@ -104,7 +104,6 @@ namespace utils {
 
 		outImage = newImage;
 
-		std::cout << "succesfully loaded texture: " << filePath << std::endl;
 		return true;
 	}
 }

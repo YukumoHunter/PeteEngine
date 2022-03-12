@@ -59,7 +59,7 @@ void PeteEngine::init_glfw() {
 void PeteEngine::key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
 	PeteEngine *inst = static_cast<PeteEngine *>(glfwGetWindowUserPointer(window));
 	
-	if (key == GLFW_KEY_E && action == GLFW_REPEAT) {
+	if (key == GLFW_KEY_W && action == GLFW_REPEAT) {
 		// cycle between 0 and 1
 		auto& renderables = inst->_renderables;
 		for (int i = 0; i < renderables.size(); i++) {
@@ -67,11 +67,43 @@ void PeteEngine::key_callback(GLFWwindow* window, int key, int scancode, int act
 		}
 	}
 
-	if (key == GLFW_KEY_R && action == GLFW_REPEAT) {
+	if (key == GLFW_KEY_S && action == GLFW_REPEAT) {
 		// cycle between 0 and 1
 		auto& renderables = inst->_renderables;
 		for (int i = 0; i < renderables.size(); i++) {
 			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(0, 0, -.5f));
+		}
+	}
+
+	if (key == GLFW_KEY_A && action == GLFW_REPEAT) {
+		// cycle between 0 and 1
+		auto& renderables = inst->_renderables;
+		for (int i = 0; i < renderables.size(); i++) {
+			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(0.5f, 0, 0));
+		}
+	}
+
+	if (key == GLFW_KEY_D && action == GLFW_REPEAT) {
+		// cycle between 0 and 1
+		auto& renderables = inst->_renderables;
+		for (int i = 0; i < renderables.size(); i++) {
+			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(-0.5f, 0, 0));
+		}
+	}
+
+	if (key == GLFW_KEY_SPACE && action == GLFW_REPEAT) {
+		// cycle between 0 and 1
+		auto& renderables = inst->_renderables;
+		for (int i = 0; i < renderables.size(); i++) {
+			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(0, -0.5f, 0));
+		}
+	}
+
+	if (key == GLFW_KEY_LEFT_SHIFT && action == GLFW_REPEAT) {
+		// cycle between 0 and 1
+		auto& renderables = inst->_renderables;
+		for (int i = 0; i < renderables.size(); i++) {
+			renderables[i].transformMatrix = glm::translate(renderables[i].transformMatrix, glm::vec3(0, 0.5f, 0));
 		}
 	}
 }
@@ -370,7 +402,8 @@ void PeteEngine::init_descriptors() {
 	std::vector<VkDescriptorPoolSize> sizes = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 },
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 }
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10 }
 	};
 
 	VkDescriptorPoolCreateInfo poolInfo{};
@@ -413,6 +446,14 @@ void PeteEngine::init_descriptors() {
 	setInfo.pBindings = &objectBinding;
 	
 	vkCreateDescriptorSetLayout(_device, &setInfo, nullptr, &_objectSetLayout);
+
+	VkDescriptorSetLayoutBinding textureBinding = initializers::descriptor_set_layout_binding(
+		VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0
+	);
+
+	setInfo.pBindings = &textureBinding;
+
+	vkCreateDescriptorSetLayout(_device, &setInfo, nullptr, &_singleTextureSetLayout);
 
 	const size_t sceneParamBufferSize = FRAME_OVERLAP * pad_uniform_buffer_size(sizeof(GPUSceneData));
 	_sceneParameterBuffer = create_buffer(sceneParamBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -485,6 +526,7 @@ void PeteEngine::init_descriptors() {
 		vmaDestroyBuffer(_allocator, _sceneParameterBuffer._buffer, _sceneParameterBuffer._allocation);
 
 		vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
+		vkDestroyDescriptorSetLayout(_device, _singleTextureSetLayout, nullptr);
 		vkDestroyDescriptorSetLayout(_device, _objectSetLayout, nullptr);
 		vkDestroyDescriptorSetLayout(_device, _globalSetLayout, nullptr);
 	});
@@ -500,7 +542,7 @@ void PeteEngine::init_pipelines() {
 	pushConstant.size = sizeof(MeshPushConstants);
 	pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-	VkDescriptorSetLayout setLayouts[] = { _globalSetLayout, _objectSetLayout };
+	VkDescriptorSetLayout setLayouts[] = { _globalSetLayout, _objectSetLayout, _singleTextureSetLayout };
 
 	// create the pipeline layout
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo = initializers::pipeline_layout_create_info();
@@ -508,7 +550,7 @@ void PeteEngine::init_pipelines() {
 	pipelineLayoutInfo.pushConstantRangeCount = 1;
 	pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
-	pipelineLayoutInfo.setLayoutCount = 2;
+	pipelineLayoutInfo.setLayoutCount = 3;
 	pipelineLayoutInfo.pSetLayouts = setLayouts;
 
 	VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &_meshPipelineLayout));
@@ -572,20 +614,59 @@ void PeteEngine::init_pipelines() {
 
 void PeteEngine::init_scene() {
 	load_mesh("assets/monkey_smooth.obj", "monkey");
+	load_mesh("assets/lost_empire.obj", "empire");
 
-	for (int x = 0; x < 10; x++) {
-		for (int y = 0; y < 10; y++) {
-			RenderObject monkey{};
-			monkey.mesh = get_mesh("monkey");
-			monkey.material = get_material("default");
-			monkey.transformMatrix = glm::translate(
-				glm::scale(glm::mat4(1.0f), glm::vec3(0.5f)),
-				glm::vec3(x * 5 - 22.5f, y * 5 - 22.5f, 0.0f)
-			);
 
-			_renderables.push_back(monkey);
-		}
-	}
+	//for (int x = 0; x < 10; x++) {
+	//	for (int y = 0; y < 10; y++) {
+	//		RenderObject monkey{};
+	//		monkey.mesh = get_mesh("monkey");
+	//		monkey.material = get_material("default");
+	//		monkey.transformMatrix = glm::translate(
+	//			glm::scale(glm::mat4(1.0f), glm::vec3(0.5f)),
+	//			glm::vec3(x * 5 - 22.5f, y * 5 - 22.5f, 0.0f)
+	//		);
+
+	//		_renderables.push_back(monkey);
+	//	}
+	//}
+
+	VkSamplerCreateInfo samplerInfo = initializers::sampler_create_info(VK_FILTER_NEAREST);
+	VkSampler sampler;
+	vkCreateSampler(_device, &samplerInfo, nullptr, &sampler);
+
+	Material* textureMat = get_material("default");
+
+	VkDescriptorSetAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocInfo.pNext = nullptr;
+	allocInfo.descriptorSetCount = 1;
+	allocInfo.descriptorPool = _descriptorPool;
+	allocInfo.pSetLayouts = &_singleTextureSetLayout;
+
+	vkAllocateDescriptorSets(_device, &allocInfo, &textureMat->textureSet);
+
+	VkDescriptorImageInfo imageBufferInfo;
+	imageBufferInfo.sampler = sampler;
+	imageBufferInfo.imageView = _textures["empire_diffuse"].imageView;
+	imageBufferInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+	VkWriteDescriptorSet texture1 = initializers::write_descriptor_image(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		textureMat->textureSet, &imageBufferInfo, 0
+	);
+
+	vkUpdateDescriptorSets(_device, 1, &texture1, 0, nullptr);
+
+	RenderObject map;
+	map.mesh = get_mesh("empire");
+	map.material = textureMat;
+	map.transformMatrix = glm::translate(glm::vec3{ 5,-10,0 });
+
+	_renderables.push_back(map);
+
+	_deletionQueue.push_function([=]() {
+		vkDestroySampler(_device, sampler, nullptr);
+	});
 }
 
 void PeteEngine::load_mesh(const std::string& filePath, const std::string& name)
@@ -804,8 +885,9 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 	GPUObjectData* objectSSBO = reinterpret_cast<GPUObjectData*>(objectData);
 	for (int i = 0; i < renderables.size(); i++) {
 		RenderObject& object = renderables[i];
-		objectSSBO[i].modelMatrix = glm::rotate(object.transformMatrix,
-			(360.0f * i / renderables.size() + _frameNumber) / 36, glm::vec3(1.0f));
+		//objectSSBO[i].modelMatrix = glm::rotate(object.transformMatrix,
+		//	(360.0f * i / renderables.size() + _frameNumber) / 36, glm::vec3(1.0f));
+		objectSSBO[i].modelMatrix = object.transformMatrix;
 	}
 	vmaUnmapMemory(_allocator, currentFrame.objectBuffer._allocation);
 
@@ -822,11 +904,19 @@ void PeteEngine::draw_objects(VkCommandBuffer cmd, std::vector<RenderObject>& re
 			// camera data descriptor
 			uint32_t uniformOffset = pad_uniform_buffer_size(sizeof(GPUSceneData)) * frameIndex;
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
-				0, 1, &currentFrame.globalDescriptor, 1, &uniformOffset);
+				0, 1, &currentFrame.globalDescriptor, 1, &uniformOffset
+			);
 
 			// object data descriptor
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
-				1, 1, &currentFrame.objectDescriptor, 0, nullptr);
+				1, 1, &currentFrame.objectDescriptor, 0, nullptr
+			);
+
+			if (object.material->textureSet != VK_NULL_HANDLE) {
+				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout,
+					2, 1, &object.material->textureSet, 0, nullptr
+				);
+			}
 		}
 
 		MeshPushConstants constants;

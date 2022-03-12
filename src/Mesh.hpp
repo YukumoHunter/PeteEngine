@@ -14,10 +14,10 @@ struct VertexInputDescription {
 };
 
 struct Vertex {
-
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec3 color;
+    glm::vec2 uv;
 
     static VertexInputDescription get_vertex_description();
 };
@@ -31,6 +31,7 @@ struct Mesh {
 };
 
 struct Material {
+    VkDescriptorSet textureSet{ VK_NULL_HANDLE };
     VkPipeline pipeline;
     VkPipelineLayout pipelineLayout;
 };
